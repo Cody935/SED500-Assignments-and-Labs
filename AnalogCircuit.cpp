@@ -2,12 +2,13 @@
 //
 // 20-May-22  M. Watler         Created.
 // 27-May-22  M. Watler         Added graphical display.
-
-#include <iomanip>//setw
+#include <GL/glut.h>
+#include <iomanip>   //setw
 #include <iostream>
 #define _USE_MATH_DEFINES
-#include <math.h>//M_PI
-#include <stdlib.h>//abs
+#include <math.h>    //M_PI
+#include <stdlib.h>  //abs
+#include <fstream>   //file output
 
 #include "AnalogCircuit.h"
 #include "Capacitor.h"
@@ -21,107 +22,124 @@ int windowWidth, windowHeight;
 double scalingFactor;
 
 void start() {
-	cout << "BEGIN" << endl;
-	AnalogCircuit circuit("RLC.dat");
-	circuit.run();
-	cout << "Press any key + ENTER to end..." << endl;
-	char key;
-	cin >> key;
-	glutLeaveMainLoop();
-	cout << "DONE!" << endl;
+    cout << "BEGIN" << endl;
+    AnalogCircuit circuit("RLC.dat");
+    circuit.run();
+    cout << "Press any key + ENTER to end..." << endl;
+    char key;
+    cin >> key;
+    glutLeaveMainLoop();
+    cout << "DONE!" << endl;
 }
 
-void AnalogCircuit::display(float R, float G, float B) {//draw a point on the screen
-//	glClear(GL_COLOR_BUFFER_BIT);
-	glColor3f(R, G, B);//RGB
-	glBegin(GL_POINTS);
-	glVertex2f(xpos, ypos);
-	glEnd();
-	glFlush();
+void AnalogCircuit::display(float R, float G, float B) { //draw a point on the screen
+    glColor3f(R, G, B); //RGB
+    glBegin(GL_POINTS);
+    glVertex2f(xpos, ypos);
+    glEnd();
+    glFlush();
 }
 
-AnalogCircuit::AnalogCircuit(string filename) {//dump data to filename, initialize variables
+AnalogCircuit::AnalogCircuit(string filename) {
+    fout.open(filename.c_str());
+    if (!fout.is_open()) {
+        cerr << "Error: could not open file " << filename << endl;
+        exit(1);
+    }
+
+    // Default simulation parameters
+    Vpeak = 10.0;       // Peak input voltage [Volts]
+    freq = 60.0;        // Frequency in Hz
+    T = 0.0001;         // Time step
+    timeMax = 0.1;      // Simulation end time [sec]
+    tolerance = 1e-6;   // Numerical tolerance
+
+    windowWidth = 800;
+    windowHeight = 600;
+    scalingFactor = 1.0;
+    xpos = 0;
+    ypos = 0;
 }
 
 void AnalogCircuit::run() {
-	component.push_back(new Capacitor(0.000100, 0.0, 1.0, 0.0, "C1"));//100uF, Green
-	component.push_back(new Inductor(0.020, 0.0, 0.0, 1.0, "L1"));//20mH, Blue
-	component.push_back(new Resistor(10, 1.0, 0.0, 0.0, "R1"));//10ohm, Red
+    // Define circuit components
+    component.push_back(new Capacitor(0.000100, 0.0, 1.0, 0.0, "C1")); //100uF, Green
+    component.push_back(new Inductor(0.020, 0.0, 0.0, 1.0, "L1"));     //20mH, Blue
+    component.push_back(new Resistor(10, 1.0, 0.0, 0.0, "R1"));        //10ohm, Red
 
-	//Horizontal line
+    fout << setw(12) << "Time"
+         << setw(12) << "I";
 
-	//Vertical line
+    for (auto &c : component)
+        fout << setw(12) << c->GetName();
+    fout << endl;
 
-	//Horizontal line markers
+    double I = 0.0;
 
-	//Vertical line markers
+    // Run first portion with sinusoidal source
+    for (double time = 0.0; time < 0.6 * timeMax; time += T) {
+        double V = Vpeak * sin(2.0 * M_PI * freq * time);
+        fout << setw(12) << time;
+        CostFunctionV(I, V);
+        xpos++;
+    }
 
-    //Display each component's name and colour
-
-    //Run the simulation for the first 0.06 seconds (timeMax is 0.1 sec)
-	//Dump data to a file as well as display on the screen
-	for (double time = 0.0; time < 0.6*timeMax; time += T) {
-		double V = Vpeak * sin(2.0 * M_PI * freq * time);
-
-        //...
-
-		CostFunctionV(I, V);
-	}
-
-	//Run the simulation to the end (timeMax is 0.1 sec)
-	//Dump data to a file as well as display on the screen
-	for (double time = 0.6*timeMax; time < timeMax; time += T) {
-		double V = 0.0;
-
-        //...
-
-		CostFunctionV(I, V);
-	}
+    // Run remaining portion with zero source (decay)
+    for (double time = 0.6 * timeMax; time < timeMax; time += T) {
+        double V = 0.0;
+        fout << setw(12) << time;
+        CostFunctionV(I, V);
+        xpos++;
+    }
 }
 
 void AnalogCircuit::CostFunctionV(double &current, double voltage) {
-	double I1 = current;
+    double I1 = current;
     double J1 = 0.0;
-	double J0 = 0.0;
-	double alpha = 1.0;
+    double J0 = 0.0;
+    double alpha = 1.0;
 
-	do {
-		double sumVoltage = 0.0;
-		list<Component*>::iterator it;
-		for (it = component.begin(); it != component.end(); ++it) {
-			double Vcomponent = (*it)->GetVoltage(I1, T);
-			sumVoltage += Vcomponent;
-		}
-		J1 = sumVoltage - voltage;
-        //Reduce alpha if J1 and J0 are of opposite signs or are equal to each other
-		if ((abs(J0 - J1) != (J0 - J1)) || J0 == J1)alpha /= 2.0;
+    do {
+        double sumVoltage = 0.0;
+        for (auto &c : component) {
+            double Vcomponent = c->GetVoltage(I1, T);
+            sumVoltage += Vcomponent;
+        }
+        J1 = sumVoltage - voltage;
 
-		if (abs(J1) > tolerance) {
-			if (J1 < 0) {//increase the current
-				I1 += alpha;
-			}
-			else {
-				I1 -= alpha;
-			}
-			J0 = J1;
-		}
-		if(alpha<tolerance/1000000.0) {//reset alpha
-			alpha = ((double)rand() / (RAND_MAX)) + 0.5;//between 0.5 and 1.5
-		}
-	} while (abs(J1) > tolerance);
+        //Adjust search step
+        if ((abs(J0 - J1) != (J0 - J1)) || J0 == J1)
+            alpha /= 2.0;
 
-	fout << setw(12) << I1;
-	list<Component*>::iterator it;
-	for (it = component.begin(); it != component.end(); ++it) {
-		fout << setw(12) << (*it)->GetVoltage(I1, T);
-		ypos = (windowHeight * (*it)->GetVoltage(I1, T) / Vpeak) / 2.0 + scalingFactor * windowHeight / 2.0;
-		(*it)->Display();
-		(*it)->Update();
-	}
-	fout << endl;
+        if (abs(J1) > tolerance) {
+            if (J1 < 0)
+                I1 += alpha;
+            else
+                I1 -= alpha;
+            J0 = J1;
+        }
+        if (alpha < tolerance / 1000000.0) {
+            alpha = ((double)rand() / (RAND_MAX)) + 0.5; // between 0.5 and 1.5
+        }
+    } while (abs(J1) > tolerance);
 
-	current = I1;
+    fout << setw(12) << I1;
+    for (auto &c : component) {
+        fout << setw(12) << c->GetVoltage(I1, T);
+        ypos = (windowHeight * c->GetVoltage(I1, T) / Vpeak) / 2.0 + scalingFactor * windowHeight / 2.0;
+        c->Display();
+        c->Update();
+    }
+    fout << endl;
+
+    current = I1;
 }
 
-AnalogCircuit::~AnalogCircuit() {//perform cleanup
+AnalogCircuit::~AnalogCircuit() {
+    for (auto &c : component) {
+        delete c;
+    }
+    component.clear();
+    if (fout.is_open())
+        fout.close();
 }
